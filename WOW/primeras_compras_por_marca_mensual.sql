@@ -1,0 +1,75 @@
+WITH
+
+MESES AS (
+    SELECT
+        ANIO_ALSEA,
+        MES_ALSEA,
+        to_date(max(FECHA)) AS FECHA_FIN,
+        -- FECHA_FIN - 180 AS FECHA_INICIO
+        to_date(min(FECHA)) AS FECHA_INICIO
+    FROM
+        WOW_REWARDS.WORK_SPACE_WOW_REWARDS.DS_DIM_TIME
+    WHERE
+        ANIO_ALSEA IN (2023)
+    AND
+        MES_ALSEA = 9
+    GROUP BY
+        ANIO_ALSEA,
+        MES_ALSEA
+),
+
+PRIMERA_VENTA_POR_USUARIO AS (
+-- Filtramos solo las compras que sean validas
+    SELECT
+        EMAIL,
+        min(to_date(DATETIME)) AS FECHA,
+        CASE
+            WHEN MARCA = 'VIPS MEXICO' THEN MARCA
+            ELSE 'CASUALES' 
+        END AS BRAND
+        -- MARCA AS BRAND
+    FROM
+        WOW_REWARDS.WORK_SPACE_WOW_REWARDS.DS_VENTAS_ORDENES_WOW
+    WHERE
+        POS_EMPLOYEE_ID NOT IN ('Power', '1 service cloud')
+    AND
+        MARCA IN (
+            'THE CHEESECAKE FACTORY MEXICO',
+            'ITS JUST WINGS',
+            'CHILIS MEXICO',
+            'ITALIANNIS MEXICO',
+            'P.F. CHANGS MEXICO',
+            'VIPS MEXICO'
+        )
+    GROUP BY
+        EMAIL,
+        BRAND
+)
+
+SELECT
+    ANIO_ALSEA,
+    MES_ALSEA,
+    BRAND,
+    count(DISTINCT EMAIL) AS PRIMERAS_VENTAS
+FROM
+    PRIMERA_VENTA_POR_USUARIO
+INNER JOIN
+    MESES
+ON
+    FECHA <= FECHA_FIN
+AND
+    FECHA_INICIO <= FECHA
+-- INNER JOIN
+--     WOW_REWARDS.WORK_SPACE_WOW_REWARDS.DS_DIM_TIME
+-- USING(
+--     FECHA
+-- )
+GROUP BY
+    ANIO_ALSEA,
+    MES_ALSEA,
+    BRAND
+ORDER BY
+    BRAND,
+    ANIO_ALSEA DESC,
+    MES_ALSEA DESC
+;

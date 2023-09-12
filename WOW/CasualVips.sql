@@ -1,0 +1,166 @@
+WITH
+
+RANGO_DE_FECHAS AS (
+    -- Seleccionamos el rango de fechas para el cual queremos generar la segmentacion
+    SELECT
+        to_date('2023-02-27') AS FECHA_INICIO_ACTIVOS,
+        to_date('2023-08-27') AS FECHA_FIN
+),
+
+VENTAS_ANY_BRAND AS (
+    -- Filtramos solo las compras que sean validas
+    SELECT
+        *
+    FROM
+        WOW_REWARDS.WORK_SPACE_WOW_REWARDS.DS_VENTAS_ORDENES_WOW
+    WHERE
+        POS_EMPLOYEE_ID NOT IN ('Power', '1 service cloud')
+    LIMIT
+        100    
+),
+
+VENTAS AS (
+    SELECT
+        CASE
+            WHEN MARCA = 'VIPS MEXICO' THEN MARCA
+            ELSE 'CASUALES' 
+        END AS BRAND,
+        TRANSACTION_ID,
+        VENTAS,
+        EMAIL,
+        to_date(DATETIME) AS FECHA,
+        to_time(DATETIME) AS HORA
+    FROM
+        VENTAS_ANY_BRAND
+    WHERE
+        MARCA IN (
+            'THE CHEESECAKE FACTORY MEXICO',
+            'ITS JUST WINGS',
+            'CHILIS MEXICO',
+            'ITALIANNIS MEXICO',
+            'P.F. CHANGS MEXICO',
+            'VIPS MEXICO'
+        )
+),
+
+REGISTROS_TOTALES AS (
+    SELECT
+        EMAIL,
+        min(to_date(TIMESTAMP)) AS FECHA_REGISTRO
+    FROM
+       SEGMENT_EVENTS.COREALSEA_PROD.REGISTRATION
+    GROUP BY
+        EMAIL
+),
+
+NUEVOS_ACTIVOS AS (
+    SELECT
+        REGISTROS_TOTALES.*,
+        'NUEVOS_ACTIVOS' AS SEGMENTO,
+        min(BRAND) AS MARCA
+    FROM
+        REGISTROS_TOTALES
+    INNER JOIN
+        RANGO_DE_FECHAS
+    ON
+        FECHA_REGISTRO BETWEEN FECHA_INICIO_ACTIVOS AND FECHA_FIN
+    LEFT JOIN
+        VENTAS
+    USING(
+        EMAIL
+    )
+    GROUP BY
+        EMAIL,
+        FECHA_REGISTRO
+    HAVING
+        count(DISTINCT TRANSACTION_ID) = 1
+),
+
+VENTAS_ACTIVOS AS (
+    SELECT
+        BRAND,
+        EMAIL,
+        COUNT(DISTINCT TRANSACTION_ID) AS ORD,
+        SUM(VENTAS) AS VENTAS
+    FROM
+        VENTAS
+    INNER JOIN
+        RANGO_DE_FECHAS
+    ON
+        FECHA BETWEEN FECHA_INICIO_ACTIVOS AND FECHA_FIN
+    WHERE
+        EMAIL NOT IN (SELECT EMAIL FROM NUEVOS_ACTIVOS)
+    GROUP BY
+        BRAND,
+        EMAIL
+),
+
+ACTIVOS AS (
+    SELECT
+        EMAIL,
+        ORD,
+        BRAND AS MARCA,
+        VENTAS AS SALES,
+        VENTAS / ORD AS TICKET_PROMEDIO,
+        CASE
+            WHEN BRAND = 'CASUALES' AND ORD < 2 THEN 'LOW VALUE'
+            WHEN BRAND = 'CASUALES' AND ORD < 4 THEN 'MEDIUM VALUE'
+            WHEN BRAND = 'CASUALES' AND ORD < 5 THEN 'HIGH VALUE'
+            WHEN BRAND = 'CASUALES' THEN 'TOP VALUE'
+            
+            WHEN BRAND = 'VIPS MEXICO' AND ORD <= 3 THEN 'LOW VALUE'
+            WHEN BRAND = 'VIPS MEXICO' AND ORD <= 12 THEN 'MEDIUM VALUE'
+            WHEN BRAND = 'VIPS MEXICO' AND ORD <= 18 THEN 'HIGH VALUE'
+            WHEN BRAND = 'VIPS MEXICO' THEN 'TOP VALUE'
+            ELSE 'ERR'
+        END AS SEGMENTO
+    FROM
+        VENTAS_ACTIVOS
+    WHERE
+        SEGMENTO <> 'ERR'
+),
+
+SEGMENTACION_TOTAL AS (
+    SELECT
+        MARCA AS BRAND,
+        SEGMENTO,
+        EMAIL
+    FROM
+        ACTIVOS
+
+    UNION ALL
+
+    SELECT
+        MARCA AS BRAND,
+        SEGMENTO,
+        EMAIL
+    FROM
+        NUEVOS_ACTIVOS
+)
+SELECT count(*), BRAND, SEGMENTO FROM SEGMENTACION_TOTAL GROUP BY SEGMENTO, BRAND ORDER BY BRAND, SEGMENTO;
+
+SELECT
+    SEGMENTO,
+    BRAND,
+    count(DISTINCT VENTAS_ACTIVOS.EMAIL) AS CUSTOMERS,
+    sum(VENTAS) AS TOTAL_SALES,
+    ratio_to_report(TOTAL_SALES) OVER (PARTITION BY BRAND) AS PERCENT_SALES,
+    sum(ORD) AS ORDENES,
+    ORDENES / CUSTOMERS AS FREQUENCY,
+    TOTAL_SALES / ORDENES AS AVERAGE_TICKET,
+    TOTAL_SALES / CUSTOMERS AS CLV
+FROM
+    VENTAS_ACTIVOS
+INNER JOIN
+    SEGMENTACION_TOTAL
+USING(
+    EMAIL,
+    BRAND
+)
+GROUP BY
+    SEGMENTO,
+    BRAND
+ORDER BY
+    BRAND,
+    CLV
+;

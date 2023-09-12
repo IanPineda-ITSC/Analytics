@@ -1,0 +1,251 @@
+-- INSERT INTO WOW_REWARDS.SEGMENTACIONES_WOW.SEGMENTACIONES
+WITH 
+
+RANGO_DE_FECHAS AS (
+    -- Seleccionamos el rango de fechas para el cual queremos generar la segmentacion
+    SELECT
+        to_date('2023-09-10') - 365 AS FECHA_INICIO_INACTIVOS,
+        to_date('2023-09-10') - 180 AS FECHA_INICIO_ACTIVOS,
+        to_date('2023-09-10') AS FECHA_FIN
+),
+
+VENTAS_ANY_BRAND AS (
+    -- Filtramos solo las compras que sean validas
+    SELECT
+        *
+    FROM
+        WOW_REWARDS.WORK_SPACE_WOW_REWARDS.DS_VENTAS_ORDENES_WOW
+    WHERE
+        POS_EMPLOYEE_ID NOT IN ('Power', '1 service cloud')
+),
+
+VENTAS_RESTAURANTES AS (
+    SELECT
+        CASE 
+            WHEN MARCA = 'VIPS MEXICO' THEN MARCA
+            ELSE 'CASUALES'
+        END AS BRAND,
+        TRANSACTION_ID,
+        VENTAS,
+        EMAIL,
+        to_date(DATETIME) AS FECHA
+    FROM
+        VENTAS_ANY_BRAND
+    WHERE
+        MARCA IN (
+            'THE CHEESECAKE FACTORY MEXICO',
+            'ITS JUST WINGS',
+            'CHILIS MEXICO',
+            'ITALIANNIS MEXICO',
+            'P.F. CHANGS MEXICO',
+            'VIPS MEXICO'
+        )
+),
+
+
+
+PRIMERA_COMPRA_POR_MARCA AS (
+    SELECT DISTINCT
+        EMAIL,
+        BRAND,
+        min(FECHA) AS FECHA
+    FROM
+        VENTAS_RESTAURANTES
+    GROUP BY
+        EMAIL,
+        BRAND
+),
+
+REGISTROS_TOTALES AS (
+    SELECT
+        EMAIL,
+        min(to_date(TIMESTAMP)) AS FECHA_REGISTRO
+    FROM
+       SEGMENT_EVENTS.COREALSEA_PROD.REGISTRATION
+    GROUP BY
+        EMAIL
+),
+
+REGISTROS AS (
+    SELECT
+        REGISTROS_TOTALES.*,
+        'REGISTROS' AS SEGMENTO,
+        null AS MARCA
+    FROM
+        REGISTROS_TOTALES
+    INNER JOIN
+        RANGO_DE_FECHAS
+    ON
+        FECHA_REGISTRO < FECHA_INICIO_ACTIVOS
+    LEFT JOIN
+        VENTAS_ANY_BRAND
+    USING(
+        EMAIL
+    )
+    WHERE
+        VENTAS_ANY_BRAND.EMAIL IS null
+),
+
+REGISTROS_SIN_COMPRA AS (
+    SELECT
+        REGISTROS_TOTALES.*,
+        'REGISTROS_SIN_COMPRA' AS SEGMENTO,
+        null AS MARCA
+    FROM
+        REGISTROS_TOTALES
+    INNER JOIN
+        RANGO_DE_FECHAS
+    ON
+        FECHA_REGISTRO BETWEEN FECHA_INICIO_ACTIVOS AND FECHA_FIN
+    LEFT JOIN
+        VENTAS_ANY_BRAND
+    USING(
+        EMAIL
+    )
+    WHERE
+        VENTAS_ANY_BRAND.EMAIL IS null
+),
+
+NUEVOS_ACTIVOS AS (
+    SELECT
+        REGISTROS_TOTALES.*,
+        'NUEVOS_ACTIVOS' AS SEGMENTO,
+        min(BRAND) AS MARCA
+    FROM
+        REGISTROS_TOTALES
+    INNER JOIN
+        RANGO_DE_FECHAS
+    ON
+        FECHA_REGISTRO BETWEEN FECHA_INICIO_ACTIVOS AND FECHA_FIN
+    LEFT JOIN
+        VENTAS_RESTAURANTES
+    ON
+        lower(REGISTROS_TOTALES.EMAIL) = lower(VENTAS_RESTAURANTES.EMAIL)
+    AND
+        VENTAS_RESTAURANTES.FECHA BETWEEN FECHA_INICIO_ACTIVOS AND FECHA_FIN
+    GROUP BY
+        REGISTROS_TOTALES.EMAIL,
+        FECHA_REGISTRO
+    HAVING
+        count(DISTINCT TRANSACTION_ID) = 1
+),
+
+VENTAS_ACTIVOS AS (
+    SELECT
+        BRAND,
+        EMAIL,
+        COUNT(DISTINCT TRANSACTION_ID) AS ORD,
+        SUM(VENTAS) AS VENTAS
+    FROM
+        VENTAS_RESTAURANTES
+    JOIN
+        RANGO_DE_FECHAS
+    WHERE
+        FECHA BETWEEN FECHA_INICIO_ACTIVOS AND FECHA_FIN
+    AND
+        EMAIL NOT IN (SELECT EMAIL FROM NUEVOS_ACTIVOS)
+    GROUP BY
+        BRAND,
+        EMAIL
+),
+
+ACTIVOS AS (
+    SELECT
+        EMAIL,
+        ORD,
+        BRAND AS MARCA,
+        VENTAS AS SALES,
+        VENTAS / ORD AS TICKET_PROMEDIO,
+        CASE
+            WHEN BRAND = 'VIPS MEXICO' AND ORD <= 3 THEN 'LOW VALUE'
+            WHEN BRAND = 'VIPS MEXICO' AND ORD <= 12 THEN 'MEDIUM VALUE'
+            WHEN BRAND = 'VIPS MEXICO' AND ORD <= 18 THEN 'HIGH VALUE'
+            WHEN BRAND = 'VIPS MEXICO' THEN 'TOP VALUE'
+            
+            WHEN ORD < 2 THEN 'LOW VALUE'
+            WHEN ORD < 4 THEN 'MEDIUM VALUE'
+            WHEN ORD < 5 THEN 'HIGH VALUE'
+            ELSE 'TOP VALUE'
+        END AS SEGMENTO
+    FROM
+        VENTAS_ACTIVOS
+),
+
+INACTIVOS_Y_PERDIDOS AS (
+    SELECT
+        BRAND AS MARCA,
+        EMAIL,
+        max(FECHA) AS ULTIMA_VENTA,
+        CASE
+            WHEN ULTIMA_VENTA > FECHA_INICIO_INACTIVOS THEN 'INACTIVOS'
+            ELSE 'PERDIDOS'
+        END AS SEGMENTO
+    FROM
+        VENTAS_RESTAURANTES
+    JOIN
+        RANGO_DE_FECHAS
+    GROUP BY
+        BRAND,
+        EMAIL,
+        FECHA_INICIO_INACTIVOS,
+        FECHA_INICIO_ACTIVOS
+    HAVING
+        ULTIMA_VENTA < FECHA_INICIO_ACTIVOS
+),
+
+SEGMENTACION_TOTAL AS (
+    SELECT
+        EMAIL,
+        SEGMENTO,
+        MARCA
+    FROM
+        ACTIVOS
+
+    UNION ALL
+
+    SELECT
+        EMAIL,
+        SEGMENTO,
+        MARCA
+    FROM
+        INACTIVOS_Y_PERDIDOS
+
+    UNION ALL
+    
+    SELECT
+        EMAIL,
+        SEGMENTO,
+        MARCA
+    FROM
+        NUEVOS_ACTIVOS
+
+    UNION ALL
+    
+    SELECT
+        EMAIL,
+        SEGMENTO,
+        MARCA
+    FROM
+        REGISTROS
+
+    UNION ALL
+
+    SELECT
+        EMAIL,
+        SEGMENTO,
+        MARCA
+    FROM
+        REGISTROS_SIN_COMPRA
+)
+
+SELECT
+    MARCA,
+    SEGMENTO,
+    count(*),
+    count(DISTINCT EMAIL),
+    count(DISTINCT lower(EMAIL))
+FROM
+    SEGMENTACION_TOTAL
+GROUP BY
+    MARCA,
+    SEGMENTO

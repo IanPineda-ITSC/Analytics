@@ -1,0 +1,6 @@
+env/
+build/
+dist/
+main.spec
+*.exe
+*.csv

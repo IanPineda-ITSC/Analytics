@@ -1,0 +1,60 @@
+WITH
+
+SEMANAS AS (
+    SELECT
+        ANIO_ALSEA,
+        SEM_ALSEA,
+        max(to_date(FECHA)) AS FECHA_FIN,
+        FECHA_FIN - 90 AS FECHA_INICIO,
+        FECHA_FIN - 180 AS FECHA_INICIO_INACTIVOS
+    FROM
+        WOW_REWARDS.WORK_SPACE_WOW_REWARDS.DS_DIM_TIME
+    WHERE
+    (
+        ANIO_ALSEA = 2023
+        AND
+        SEM_ALSEA = 36
+    )
+    GROUP BY
+        SEM_ALSEA,
+        ANIO_ALSEA
+),
+
+USUARIOS_INACTIVOS_POR_MES AS (
+    SELECT
+        ANIO_ALSEA,
+        SEM_ALSEA,
+        lower(EMAIL) AS EMAIL
+    FROM
+        SEGMENT_EVENTS.SESSIONM_SBX.FACT_TRANSACTIONS
+    INNER JOIN
+        SEMANAS
+    ON
+        to_date(CREATED_AT) <= FECHA_FIN
+    AND 
+        FECHA_INICIO_INACTIVOS <= to_date(CREATED_AT)
+    GROUP BY
+        SEM_ALSEA,
+        ANIO_ALSEA,
+        FECHA_INICIO,
+        lower(EMAIL)
+    HAVING
+        max(to_date(CREATED_AT)) < FECHA_INICIO
+    ORDER BY
+        ANIO_ALSEA DESC,
+        SEM_ALSEA DESC
+)
+
+SELECT
+    ANIO_ALSEA,
+    SEM_ALSEA,
+    count(DISTINCT EMAIL) AS INACTIVOS
+FROM
+    USUARIOS_INACTIVOS_POR_MES
+GROUP BY
+    ANIO_ALSEA,
+    SEM_ALSEA
+ORDER BY
+    ANIO_ALSEA,
+    SEM_ALSEA
+;

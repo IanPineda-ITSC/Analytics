@@ -1,0 +1,44 @@
+WITH
+
+SEMANAS AS (
+    SELECT
+        SEM_ALSEA,
+        MES_ALSEA,
+        ANIO_ALSEA,
+        max(to_date(FECHA)) AS FECHA_FIN,
+        FECHA_FIN - 90 AS FECHA_INICIO
+    FROM
+        WOW_REWARDS.WORK_SPACE_WOW_REWARDS.DS_DIM_TIME
+    WHERE
+    (
+        ANIO_ALSEA = 2023
+        AND
+        SEM_ALSEA = 34
+    )
+    GROUP BY
+        SEM_ALSEA,
+        MES_ALSEA,
+        ANIO_ALSEA
+)
+
+SELECT
+    ANIO_ALSEA,
+    MES_ALSEA,
+    SEM_ALSEA,
+    count(DISTINCT lower(EMAIL))
+FROM
+    SEGMENT_EVENTS.SESSIONM_SBX.FACT_TRANSACTIONS
+INNER JOIN
+    SEMANAS
+ON
+    to_date(CREATED_AT) <= FECHA_FIN
+AND 
+    FECHA_INICIO <= to_date(CREATED_AT)
+GROUP BY
+    SEM_ALSEA,
+    MES_ALSEA,
+    ANIO_ALSEA
+ORDER BY
+    ANIO_ALSEA DESC,
+    SEM_ALSEA DESC
+;
